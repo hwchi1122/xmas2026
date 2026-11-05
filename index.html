@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="zh-Hant"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>十年回憶搶答</title>
+<style>
+:root{--bg:#fbf7f2;--fg:#2b2320;--card:#fff;--mut:#7a6c63;--acc:#c0392b;--ok:#2e8b57;--bd:#e6dcd2}
+@media (prefers-color-scheme:dark){:root{--bg:#1c1816;--fg:#f3ebe4;--card:#2a2421;--mut:#b3a499;--acc:#ff6f61;--ok:#4cc38a;--bd:#3d3532;color-scheme:dark}}
+*{box-sizing:border-box}html,body{margin:0}
+body{background:var(--bg);color:var(--fg);font:16px/1.5 system-ui,-apple-system,"Noto Sans TC","PingFang TC",sans-serif;max-width:560px;margin:0 auto;padding:max(12px,env(safe-area-inset-top)) 12px max(12px,env(safe-area-inset-bottom))}
+h1{font-size:20px;margin:4px 0 10px}h2{font-size:18px;margin:0 0 8px}
+.tabs{display:flex;gap:6px;margin-bottom:10px}
+.tabs button{flex:1;padding:10px;border:1px solid var(--bd);background:var(--card);color:var(--fg);border-radius:10px;font-size:15px}
+.tabs button.on{background:var(--acc);color:#fff;border-color:var(--acc)}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:14px;padding:14px;margin-bottom:10px}
+input,select,textarea{width:100%;padding:9px;margin:3px 0;border:1px solid var(--bd);border-radius:8px;background:var(--bg);color:var(--fg);font:inherit}
+button.pri,button.opt{width:100%;padding:12px;margin:5px 0;border-radius:10px;border:1px solid var(--bd);background:var(--card);color:var(--fg);font-size:16px;text-align:left}
+button.pri{background:var(--acc);color:#fff;border-color:var(--acc);text-align:center}
+button.opt.sel{border-color:var(--acc);outline:2px solid var(--acc)}
+button.opt.ok{background:var(--ok);color:#fff;border-color:var(--ok)}
+button:disabled{opacity:.65}
+.bar{height:10px;background:var(--bd);border-radius:6px;overflow:hidden;margin:8px 0}.bar i{display:block;height:100%;width:100%;background:var(--acc)}
+.mut{color:var(--mut);font-size:14px}.row{display:flex;justify-content:space-between;gap:8px;padding:4px 0;border-bottom:1px dashed var(--bd)}
+img.q{width:100%;border-radius:10px;margin:6px 0}.hide{display:none}
+</style></head><body>
+<h1>🎄 十年回憶搶答</h1>
+<div id="join" class="card hide"><h2>歡迎！請輸入暱稱加入</h2><input id="jn" maxlength="12" placeholder="暱稱（最多 12 字）"><button class="pri" id="jb">加入遊戲</button><p class="mut" id="jm"></p></div>
+<div id="app" class="hide">
+<div class="tabs"><button data-t="pSubmit" class="on">出題</button><button data-t="pGame">遊戲</button><button data-t="pHost" id="tHost" class="hide">主持人</button></div>
+<div id="pSubmit"></div><div id="pGame" class="hide"></div><div id="pHost" class="hide"></div>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.js"></script>
+<script>
+const SB_URL='https://bwmtrdeaakbtixzoxjag.supabase.co',KEY='sb_publishable_DfQ_o5KgShNZ1ZpzHo5Rgw_MRelW_ee',SEC=15;
+const sb=supabase.createClient(SB_URL,KEY);
+const $=id=>document.getElementById(id),rpc=(f,a)=>sb.rpc(f,a);
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+let me,G={phase:'lobby'},P={},Q={},R={},SC=[],mySec={},myAns={},off=0,pin='',host=false,lk='',revK='',cnt=0,filled=false,imgs={},arm=false;
+const nm=u=>(P[u]&&P[u].name)||'玩家';
+const total=()=>{const t={};SC.forEach(s=>t[s.player_id]=(t[s.player_id]||0)+s.points);return t};
+const ranking=()=>{const t=total();return Object.keys(P).map(u=>[u,t[u]||0]).sort((a,b)=>b[1]-a[1])};
+const rankHtml=n=>ranking().slice(0,n).map(([u,p],i)=>`<div class=row><span>${i+1}. ${esc(nm(u))}${u===me?'（你）':''}</span><b>${p}</b></div>`).join('');
+const msg=t=>{$('msg').textContent=t};
+// ---- 加入 ----
+(async()=>{
+  buildSubmit();if(location.hash==='#host')$('tHost').classList.remove('hide');
+  const{data:{session}}=await sb.auth.getSession();
+  if(session){me=session.user.id;const{data}=await sb.from('players').select('id').eq('id',me);if(data&&data.length)return start()}
+  $('join').classList.remove('hide');
+})();
+$('jb').onclick=async()=>{
+  const n=$('jn').value.trim().slice(0,12);if(!n)return;$('jm').textContent='加入中…';
+  if(!me){const{data,error}=await sb.auth.signInAnonymously();if(error)return $('jm').textContent='登入失敗：'+error.message;me=data.user.id}
+  const{error}=await sb.from('players').upsert({id:me,name:n});if(error)return $('jm').textContent=error.message;
+  $('join').classList.add('hide');start();
+};
+async function start(){
+  $('app').classList.remove('hide');await refresh();await loadGame();
+  const{data:s}=await sb.from('question_secrets').select('*');(s||[]).forEach(r=>mySec[r.question_id]=r.answer);prefill();
+  setInterval(loadGame,3000);setInterval(()=>{if(G.phase==='lobby')refresh()},5000);
+  sb.channel('x').on('postgres_changes',{event:'*',schema:'public',table:'game'},loadGame)
+    .on('postgres_changes',{event:'*',schema:'public',table:'players'},refresh)
+    .on('postgres_changes',{event:'*',schema:'public',table:'questions'},refresh).subscribe();
+}
+async function refresh(){
+  const[p,q,r,s]=await Promise.all(['players','questions','reveals','scores'].map(t=>sb.from(t).select('*')));
+  P={};(p.data||[]).forEach(x=>P[x.id]=x);Q={};(q.data||[]).forEach(x=>Q[x.id]=x);
+  R={};(r.data||[]).forEach(x=>R[x.question_id]=x.answer);SC=s.data||[];render();
+}
+async function loadGame(){
+  const{data}=await sb.from('game').select('*').eq('id',1).single();if(!data)return;
+  const k=data.round+':'+data.idx+':'+data.phase,ch=k!==lk;G=data;
+  if(ch){lk=k;const t=await rpc('server_now');off=Date.parse(t.data)-Date.now();
+    const a=await sb.from('answers').select('question_id,choice');(a.data||[]).forEach(x=>myAns[x.question_id]=x.choice);
+    await refresh();const on=document.querySelector('.tabs .on');
+    if(G.phase!=='lobby'&&on&&on.dataset.t!=='pHost')show('pGame');
+  }else render();
+}
+// ---- 出題 ----
+function buildSubmit(){
+  let h=`<div class=card><h2>出題</h2><p class=mut>每人 2 題單選題（可附圖）。正確答案只有你自己讀得到，連主持人都看不到；題目結束時由伺服器自動揭曉並計分。</p></div>`;
+  for(let k=1;k<=2;k++){h+=`<div class=card><h2>第 ${k} 題</h2><textarea id=t${k} rows=2 maxlength=80 placeholder="題目（十年內的共同回憶）"></textarea><div class=mut>題目圖片（選填）</div><input type=file accept="image/*" id=f${k}><div class=mut id=fi${k}></div>`;
+    for(let i=0;i<4;i++)h+=`<input id=o${k}${i} maxlength=30 placeholder="選項 ${'ABCD'[i]}">`;
+    h+=`<select id=c${k}>${[0,1,2,3].map(i=>`<option value=${i}>正確答案：${'ABCD'[i]}</option>`).join('')}</select></div>`}
+  $('pSubmit').innerHTML=h+`<button class=pri id=save>儲存題目</button><p class=mut id=msg></p>`;$('save').onclick=save;
+}
+async function upImg(f,k){
+  const bmp=await createImageBitmap(f),r=Math.min(1,900/Math.max(bmp.width,bmp.height));
+  const c=document.createElement('canvas');c.width=Math.round(bmp.width*r);c.height=Math.round(bmp.height*r);
+  c.getContext('2d').drawImage(bmp,0,0,c.width,c.height);
+  const blob=await new Promise(res=>c.toBlob(res,'image/jpeg',.8)),path=`${me}/${Date.now()}_${k}.jpg`;
+  const{error}=await sb.storage.from('qimg').upload(path,blob,{contentType:'image/jpeg'});if(error)throw error;
+  return sb.storage.from('qimg').getPublicUrl(path).data.publicUrl;
+}
+async function save(){
+  if(G.phase!=='lobby')return msg('遊戲已開始，無法修改');
+  const rows=[],ans=[];
+  for(let k=1;k<=2;k++){const t=$('t'+k).value.trim(),o=[0,1,2,3].map(i=>$(`o${k}${i}`).value.trim());
+    if(!t||o.some(x=>!x))return msg(`第 ${k} 題請填寫完整`);
+    let img=imgs[k]||null;const f=$('f'+k).files[0];
+    if(f){msg('圖片上傳中…');try{img=await upImg(f,k)}catch(e){return msg(`第 ${k} 題圖片上傳失敗：`+(e.message||e))}}
+    rows.push({owner:me,idx:k,body:t,opts:o,image_url:img});ans.push(+$('c'+k).value)}
+  const{data,error}=await sb.from('questions').upsert(rows,{onConflict:'owner,idx'}).select();
+  if(error)return msg('儲存失敗：'+error.message);
+  const sec=data.map(q=>({question_id:q.id,owner:me,answer:ans[q.idx-1]}));
+  const e2=(await sb.from('question_secrets').upsert(sec,{onConflict:'question_id'})).error;
+  if(e2)return msg('答案儲存失敗：'+e2.message);
+  data.forEach(q=>{mySec[q.id]=ans[q.idx-1];if(q.image_url){imgs[q.idx]=q.image_url;$('fi'+q.idx).textContent='已附圖片（重新選檔可更換）'}});
+  msg('已儲存 ✓ 開賽前都可以修改');
+}
+function prefill(){
+  if(filled)return;const mine=Object.values(Q).filter(q=>q.owner===me);if(!mine.length)return;filled=true;
+  mine.forEach(q=>{const k=q.idx;$('t'+k).value=q.body;q.opts.forEach((o,i)=>$(`o${k}${i}`).value=o);$('c'+k).value=mySec[q.id]??0;
+    if(q.image_url){imgs[k]=q.image_url;$('fi'+k).textContent='已附圖片（重新選檔可更換）'}});
+}
+// ---- 遊戲 ----
+function render(){renderGame();renderHost()}
+function renderGame(){
+  const el=$('pGame');
+  if(G.phase==='lobby'){const n=new Set(Object.values(Q).map(q=>q.owner)).size;el.innerHTML=`<div class=card><h2>等待主持人開始…</h2><p>已加入 ${Object.keys(P).length} 人，已出題 ${n} 人</p></div>`;return}
+  if(G.phase==='done'){el.innerHTML=`<div class=card><h2>🏆 最終排名</h2>${rankHtml(20)}</div>`;return}
+  const id=G.order_ids[G.idx],q=Q[id];if(!q){el.innerHTML='<div class=card>載入中…</div>';return}
+  const mine=q.owner===me,got=myAns[id],ph=G.phase,ok=ph==='reveal'?R[id]:null;
+  let h=`<div class=card><div class=mut>第 ${G.idx+1} / ${G.order_ids.length} 題 ・出題者：${ph==='reveal'?esc(nm(q.owner)):'？？？'}</div><h2>${esc(q.body)}</h2>${q.image_url?`<img class=q src="${esc(q.image_url)}" alt="">`:''}`;
+  if(ph==='question')h+=`<div class=bar><i id=bar></i></div><div class=mut id=sec></div>`;
+  h+=q.opts.map((o,i)=>`<button class="opt${got===i?' sel':''}${ok===i?' ok':''}" data-i=${i} ${(mine||got!=null||ph!=='question')?'disabled':''}>${'ABCD'[i]}. ${esc(o)}</button>`).join('');
+  if(mine)h+=`<p class=mut>這是你出的題，本題不計分，請保持安靜 🤫${mySec[id]!=null?`（你的答案：${'ABCD'[mySec[id]]}）`:''}</p>`;
+  if(ph==='question'&&got!=null)h+=`<p class=mut>已作答，等待揭曉…</p>`;
+  if(ph==='reveal'){
+    if(ok==null)h+=`<p class=mut>計分中…</p>`;
+    else{const pq=SC.filter(s=>s.question_id===id).sort((a,b)=>b.points-a.points),p=pq.find(s=>s.player_id===me);
+      if(!mine)h+=`<p><b>${p?`答對！+${p.points} 分`:got!=null?'答錯了':'未作答'}</b></p>`;
+      h+=`<div class=mut>本題最快答對</div>`+pq.slice(0,3).map(s=>`<div class=row><span>${esc(nm(s.player_id))}</span><b>+${s.points}</b></div>`).join('')+`<div class=mut style="margin-top:8px">目前前五名</div>`+rankHtml(5)}
+  }
+  el.innerHTML=h+'</div>';
+}
+$('pGame').onclick=async e=>{
+  const b=e.target.closest('.opt');if(!b)return;const i=+b.dataset.i,id=G.order_ids[G.idx];
+  if(G.phase!=='question'||myAns[id]!=null||Q[id].owner===me)return;
+  myAns[id]=i;renderGame();const{error}=await rpc('submit_answer',{qid:id,c:i});
+  if(error){delete myAns[id];renderGame()}
+};
+setInterval(()=>{const b=$('bar');if(!b||G.phase!=='question')return;
+  const r=Math.max(0,(Date.parse(G.ends_at)-(Date.now()+off))/1000);b.style.width=Math.min(100,r/SEC*100)+'%';$('sec').textContent=Math.ceil(r)+' 秒';
+  if(r<=0)document.querySelectorAll('#pGame .opt').forEach(x=>x.disabled=true)},100);
+// ---- 主持人（網址後加 #host）----
+function renderHost(){
+  if($('tHost').classList.contains('hide')||$('pHost').classList.contains('hide'))return;
+  if($('pin')&&!host&&document.activeElement===$('pin'))return;
+  let h='';
+  if(!host)h=`<div class=card><h2>主持人登入</h2><input id=pin type=password placeholder="主持人密碼"><button class=pri id=hb>登入</button><p class=mut id=hm></p></div>`;
+  else{
+    h=`<div class=card><h2>主持人控制</h2><p class=mut>狀態：${G.phase}${G.order_ids&&G.order_ids.length?`　第 ${G.idx+1}/${G.order_ids.length} 題　已作答 ${cnt} 人`:''}</p>`;
+    if(G.phase==='lobby')h+=`<button class=pri id=bS>開始遊戲（隨機排序）</button>`;
+    if(G.phase==='question')h+=`<button class=pri id=bF>提前結束並揭曉</button>`;
+    if(G.phase==='reveal')h+=`<button class=pri id=bN>${G.idx+1<G.order_ids.length?'下一題':'結束並公布總排名'}</button>`;
+    h+=`<button class=opt id=bR>${arm?'再按一次確認重置':'重置整場遊戲'}</button></div><div class=card><h2>玩家掃描加入</h2><img id=qr alt="" style="width:220px;max-width:100%"></div>`;
+    h+=`<div class=card><h2>玩家（${Object.keys(P).length}）</h2>`+Object.keys(P).map(u=>`<div class=row><span>${esc(nm(u))} ${Object.values(Q).some(q=>q.owner===u)?'✅':'⏳'}</span><b>${total()[u]||0}</b></div>`).join('')+'</div>';
+  }
+  $('pHost').innerHTML=h;
+  if($('hb'))$('hb').onclick=async()=>{pin=$('pin').value;const{data}=await rpc('is_admin',{pin});if(data){host=true;renderHost()}else $('hm').textContent='密碼錯誤'};
+  const B=(i,f)=>$(i)&&($(i).onclick=async()=>{const{error}=await f();if(error)alert(error.message)});
+  B('bS',()=>rpc('admin_start',{pin}));B('bF',()=>rpc('admin_reveal',{pin}));B('bN',()=>rpc('admin_next',{pin}));
+  B('bR',async()=>{if(!arm){arm=true;renderHost();return{}}arm=false;const r=await rpc('admin_reset',{pin});myAns={};return r});
+  if($('qr')){const q=qrcode(0,'M');q.addData(location.href.split('#')[0]);q.make();$('qr').src=q.createDataURL(6,2)}
+}
+setInterval(async()=>{ // 主持人頁面負責時間到自動揭曉
+  if(!host||G.phase!=='question')return;
+  if(Date.now()+off>Date.parse(G.ends_at)+1500&&revK!==lk){revK=lk;await rpc('admin_reveal',{pin})}
+  else{const c=await rpc('answer_count');if(c.data!==cnt){cnt=c.data;renderHost()}}
+},700);
+document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>show(b.dataset.t));
+function show(t){document.querySelectorAll('.tabs button').forEach(x=>x.classList.toggle('on',x.dataset.t===t));
+  ['pSubmit','pGame','pHost'].forEach(p=>$(p).classList.toggle('hide',p!==t));if(t==='pHost')renderHost()}
+</script></body></html>
